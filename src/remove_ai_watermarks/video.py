@@ -1,0 +1,1052 @@
+"""High-level video processing API.
+
+The product path covers provenance identification, container-level AI metadata
+removal, temporally stabilized visible Sora, Veo, Seedance, Dola, Hailuo AI, and
+Kling AI removal, and explicit VAE profiles for video SynthID and experimental
+Seedance processing.
+The visible pixel path reuses the image package's shared fill backends.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, Literal
+
+from remove_ai_watermarks._internal.tc260_producers import TC260_PRODUCERS
+from remove_ai_watermarks.video_synthid import (
+    DEFAULT_VIDEO_SYNTHID_FPS,
+    DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    DEFAULT_VIDEO_SYNTHID_VAE,
+)
+
+if TYPE_CHECKING:
+    from remove_ai_watermarks.video_invisible import RegenerationMetrics, VideoVaeRuntime
+    from remove_ai_watermarks.video_visible import VideoScan
+
+VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"})
+VIDEO_VISIBLE_MARKS = ("sora", "veo", "seedance", "doubao", "dola", "hailuo", "vidu", "kling")
+_ISOBMFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v"})
+_EBML_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".webm", ".mkv"})
+_RIFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".avi"})
+_FLV_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".flv"})
+_REGENERATED_VIDEO_EXTENSIONS: frozenset[str] = _ISOBMFF_VIDEO_EXTENSIONS
+
+
+def _require_video_runtime() -> None:
+    """Raise with the public install command when a video runtime is absent.
+
+    Shell-quoted, for the same reason as the other install hints: a bare
+    ``pkg[extra]`` is a glob in zsh, so an unquoted copy-paste dies with
+    "no matches found" before pip ever runs.
+    """
+    from remove_ai_watermarks.optional_deps import module_available
+
+    if not module_available("cv2", "numpy", "av"):
+        raise RuntimeError("Video pixel processing requires 'remove-ai-watermarks[video]'")
+
+
+@dataclass(frozen=True)
+class VideoMetadataReport:
+    """AI metadata found in one supported video container."""
+
+    source: Path
+    has_ai_metadata: bool
+    markers: dict[str, str]
+
+
+@dataclass(frozen=True)
+class VideoAudioStatus:
+    """Audio disposition for a video output without an audio watermark check."""
+
+    stream_action: Literal["copied_if_present", "not_written"] = "copied_if_present"
+    watermark_status: Literal["unverified"] = "unverified"
+
+
+class _VideoAudioBoundary:
+    """Derive the audio disposition from whether an output was written."""
+
+    @property
+    def audio(self) -> VideoAudioStatus:
+        """Return the non-claiming audio status for this result."""
+        action: Literal["copied_if_present", "not_written"] = (
+            "copied_if_present" if getattr(self, "output", None) is not None else "not_written"
+        )
+        return VideoAudioStatus(stream_action=action)
+
+
+@dataclass(frozen=True)
+class VideoMetadataResult(_VideoAudioBoundary):
+    """Result of a verified metadata strip that preserves source audio."""
+
+    source: Path
+    output: Path
+    detected: dict[str, str]
+    remaining: dict[str, str]
+
+
+@dataclass(frozen=True)
+class VideoProvenanceReport:
+    """Locally verifiable provenance signals found in one video."""
+
+    source: Path
+    is_ai_generated: Literal[True] | None
+    confidence: Literal["high", "unknown"]
+    platform: str | None
+    visible_mark: str | None
+    visible_detected_frames: int
+    total_frames: int | None
+    has_ai_metadata: bool
+    metadata_markers: dict[str, str]
+    caveats: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class VideoVisibleResult(_VideoAudioBoundary):
+    """Result of visible AI-watermark removal with unverified copied audio."""
+
+    source: Path
+    output: Path | None
+    mark: str
+    total_frames: int
+    detected_frames: int
+    removed_frames: int
+    remaining_metadata: dict[str, str]
+
+
+@dataclass(frozen=True)
+class VideoInvisibleResult(_VideoAudioBoundary):
+    """Result of applying the calibrated VAE profile to video pixels only."""
+
+    source: Path
+    output: Path
+    noise_std: float
+    metrics: RegenerationMetrics
+    remaining_metadata: dict[str, str]
+
+    @property
+    def visual_invisible_action(self) -> Literal["regenerated"]:
+        """Describe the pixel action without claiming a per-file watermark verdict."""
+        return "regenerated"
+
+    @property
+    def total_frames(self) -> int:
+        return self.metrics.frames
+
+    @property
+    def fps(self) -> float:
+        return self.metrics.fps
+
+    @property
+    def width(self) -> int:
+        return self.metrics.width
+
+    @property
+    def height(self) -> int:
+        return self.metrics.height
+
+    @property
+    def psnr_db(self) -> float:
+        return self.metrics.psnr_db
+
+    @property
+    def temporal_residual_ratio(self) -> float:
+        return self.metrics.temporal_residual_ratio
+
+
+@dataclass(frozen=True)
+class VideoSeedanceExperimentalResult(VideoInvisibleResult):
+    """Experimental Seedance reconstruction, without a per-file detector verdict."""
+
+    quality: Literal["delivery", "master"] = "delivery"
+    profile: Literal["seedance-texture-v1"] = "seedance-texture-v1"
+    experimental: bool = True
+
+
+@dataclass(frozen=True)
+class VideoAllResult(_VideoAudioBoundary):
+    """Result of visible, metadata, and optional video-pixel processing."""
+
+    source: Path
+    output: Path
+    visible_mark: str | None
+    total_frames: int
+    visible_detected_frames: int
+    visible_removed_frames: int
+    detected_metadata: dict[str, str]
+    remaining_metadata: dict[str, str]
+    invisible_removed: bool
+    invisible_profile: Literal["synthid", "seedance-experimental"] | None = None
+
+    @property
+    def visual_invisible_action(self) -> Literal["not_run", "regenerated"]:
+        """Describe whether the opt-in visual regeneration stage ran."""
+        return "regenerated" if self.invisible_removed else "not_run"
+
+
+@dataclass(frozen=True)
+class VideoBatchItem(_VideoAudioBoundary):
+    """Outcome for one source in a video batch, including the audio boundary."""
+
+    source: Path
+    output: Path | None
+    mode: Literal["all", "visible", "metadata"]
+    changed: bool
+    visible_mark: str | None
+    invisible_removed: bool
+    error: str | None = None
+
+    @property
+    def visual_invisible_action(self) -> Literal["not_run", "regenerated"]:
+        """Describe whether visual regeneration ran for this item."""
+        return "regenerated" if self.invisible_removed else "not_run"
+
+
+@dataclass(frozen=True)
+class VideoBatchResult:
+    """Aggregate outcome for a sequential video batch."""
+
+    directory: Path
+    output_directory: Path
+    items: tuple[VideoBatchItem, ...]
+
+    @property
+    def processed(self) -> int:
+        return sum(item.error is None for item in self.items)
+
+    @property
+    def failed(self) -> int:
+        return sum(item.error is not None for item in self.items)
+
+    @property
+    def invisible_removed(self) -> int:
+        return sum(item.invisible_removed for item in self.items)
+
+
+_VISIBLE_PLATFORM = {
+    "sora": "OpenAI Sora",
+    "veo": "Google Veo",
+    "seedance": "ByteDance Seedance",
+    "dola": "ByteDance Dola",
+    **{
+        row.video_mark: row.video_platform
+        for row in TC260_PRODUCERS
+        if row.video_mark is not None and row.video_platform is not None
+    },
+}
+
+
+def _video_source(source: str | Path) -> Path:
+    path = Path(source)
+    if not path.exists():
+        raise FileNotFoundError(f"Video does not exist: {path}")
+    if not path.is_file():
+        raise ValueError(f"Video source must be a file: {path}")
+    if path.suffix.lower() not in VIDEO_EXTENSIONS:
+        supported = ", ".join(sorted(VIDEO_EXTENSIONS))
+        raise ValueError(f"Unsupported video format {path.suffix or '<none>'}; expected one of: {supported}")
+    from remove_ai_watermarks._internal.ebml import EBML_MAGIC
+
+    with path.open("rb") as stream:
+        head = stream.read(12)
+    suffix = path.suffix.lower()
+    matches_container = (
+        (suffix in _ISOBMFF_VIDEO_EXTENSIONS and len(head) >= 8 and head[4:8] == b"ftyp")
+        or (suffix in _EBML_VIDEO_EXTENSIONS and head.startswith(EBML_MAGIC))
+        or (suffix in _RIFF_VIDEO_EXTENSIONS and len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"AVI ")
+        or (suffix in _FLV_VIDEO_EXTENSIONS and head.startswith(b"FLV"))
+    )
+    if not matches_container:
+        raise ValueError(f"Video content does not match its {suffix} extension: {path}")
+    from remove_ai_watermarks.metadata import unreadable_reason
+
+    if (reason := unreadable_reason(path)) is not None:
+        raise ValueError(f"Cannot read video {path}: {reason}")
+    return path
+
+
+def _video_output(
+    source: Path,
+    output: str | Path | None,
+    *,
+    operation: str = "metadata removal",
+) -> Path:
+    path = Path(output) if output is not None else source.with_stem(source.stem + "_clean")
+    if path.suffix.lower() != source.suffix.lower():
+        raise ValueError(
+            f"Video output container must match the source ({source.suffix}); "
+            f"{operation} does not change containers to {path.suffix or '<none>'}"
+        )
+    if path.resolve() == source.resolve():
+        raise ValueError(f"Video {operation} requires a distinct output path")
+    return path
+
+
+def _visible_removal_plan(
+    selected_mark: str,
+    selected_scan: VideoScan,
+    markers: dict[str, str],
+) -> tuple[list[tuple[int, int, int, int] | None], float, Literal["box", "veo"]]:
+    """Resolve one provider's stable frame regions and fill geometry.
+
+    Everything provider-specific -- the confidence floors, the run length, the fill
+    padding and the mask style -- is data on ``VISIBLE_MARK_POLICIES``; which metadata
+    confirms or contradicts which vendor lives beside the predicates in
+    ``video_visible``.
+    """
+    from remove_ai_watermarks.video_visible import (
+        VISIBLE_MARK_POLICIES,
+        confirms_video_provenance,
+        contradicts_video_provenance,
+        stabilize_localizations,
+    )
+
+    policy = VISIBLE_MARK_POLICIES[selected_mark]
+    if contradicts_video_provenance(selected_mark, markers):
+        return [None] * len(selected_scan.detections), policy.padding_fraction, policy.mask_style
+    confirmed = confirms_video_provenance(selected_mark, markers)
+    regions = stabilize_localizations(selected_mark, selected_scan.detections, provenance=confirmed)
+    return regions, policy.padding_fraction, policy.mask_style
+
+
+def _select_stable_visible_mark(
+    scans: dict[str, VideoScan],
+    markers: dict[str, str],
+    candidate_marks: tuple[str, ...],
+) -> (
+    tuple[
+        str,
+        VideoScan,
+        list[tuple[int, int, int, int] | None],
+        float,
+        Literal["box", "veo"],
+    ]
+    | None
+):
+    """Select the first stable mark in specificity order that provenance does not veto."""
+    for candidate_mark in candidate_marks:
+        regions, padding, mask_style = _visible_removal_plan(candidate_mark, scans[candidate_mark], markers)
+        if any(region is not None for region in regions):
+            return candidate_mark, scans[candidate_mark], regions, padding, mask_style
+    return None
+
+
+# C2PA fields that describe a manifest without asserting AI. A platform that
+# re-signs every upload (YouTube, "opened" and "transcoded") leaves only these,
+# and the signer's name alone is not an AI generator claim.
+_C2PA_STRUCTURAL_MARKERS = frozenset(
+    {
+        "c2pa_manifest",
+        "claim_generator",
+        "ai_tool",
+        "c2pa_spec",
+        "issuer",
+        "actions",
+        "c2pa_validation_source",
+        "c2pa_validation_state",
+        "c2pa_integrity",
+        "c2pa_signature",
+        "c2pa_signer_trust",
+        "c2pa_signer_validity",
+    }
+)
+
+
+def _video_markers_claim_ai(markers: dict[str, str]) -> bool:
+    """Return whether the metadata asserts AI, mirroring the image path's C2PA rule.
+
+    A marker outside the C2PA structure (a digital source type, SynthID, a TC260
+    label, an xAI signature) asserts AI. A C2PA manifest with nothing else does
+    so only through an AI-generator identity: a registered AI signer or an AI
+    product named as the claim generator.
+    """
+    from remove_ai_watermarks._internal.c2pa import claim_generator_platform, registry_word_matches
+    from remove_ai_watermarks._internal.constants import C2PA_AI_TOOLS, C2PA_IDENTITY_AI_ORGS
+
+    source_type = markers.get("source_type", "")
+    if any(key not in _C2PA_STRUCTURAL_MARKERS and key != "source_type" for key in markers):
+        return True
+    if "trainedalgorithmicmedia" in source_type.casefold() or source_type.startswith("c2pa.ai-disclosure"):
+        return True
+    issuer = markers.get("issuer", "")
+    return any(org in issuer for org in C2PA_IDENTITY_AI_ORGS) or any(
+        claim_generator_platform(value) is not None or bool(registry_word_matches(value, C2PA_AI_TOOLS))
+        for value in (markers.get("claim_generator", ""), markers.get("ai_tool", ""))
+    )
+
+
+def _platform_from_video_metadata(markers: dict[str, str]) -> str | None:
+    """Map supported C2PA-derived marker text to its generating platform."""
+    from remove_ai_watermarks._internal.c2pa import c2pa_vendor_platform, claim_generator_platform
+    from remove_ai_watermarks._internal.constants import C2PA_SIGNER_PLATFORM_BY_ORG
+    from remove_ai_watermarks.metadata import LOCAL_GENERATION_METADATA_KEYS
+
+    generator = markers.get("claim_generator", "")
+    ai_tool = markers.get("ai_tool", "")
+    if platform := (
+        claim_generator_platform(generator)
+        or c2pa_vendor_platform(generator)
+        or claim_generator_platform(ai_tool)
+        or c2pa_vendor_platform(ai_tool)
+        or c2pa_vendor_platform(markers.get("app_provenance", ""))
+        or c2pa_vendor_platform("\n".join(markers.values()))
+    ):
+        return platform
+    issuer = markers.get("issuer", "")
+    if signer_platform := next(
+        (C2PA_SIGNER_PLATFORM_BY_ORG[org] for org in C2PA_SIGNER_PLATFORM_BY_ORG if org in issuer),
+        None,
+    ):
+        return signer_platform
+    if "aigc_label" in markers:
+        return _tc260_video_platform(markers.get("aigc_producer", "")) or (
+            "China AIGC-labeled content (TC260 standard)"
+        )
+    if (app_aigc := markers.get("app_aigc", "")).startswith("App AIGC disclosure (") and app_aigc.endswith(")"):
+        return app_aigc.removeprefix("App AIGC disclosure (").removesuffix(")")
+    if (app_provenance := markers.get("app_provenance", "")).startswith(
+        "App export provenance ("
+    ) and app_provenance.endswith(")"):
+        return app_provenance.removeprefix("App export provenance (").removesuffix(")")
+    if "kling_sei" in markers:
+        return _tc260_video_platform("kling")
+    if any(key.lower() in LOCAL_GENERATION_METADATA_KEYS for key in markers):
+        return "Stable Diffusion / local pipeline (Automatic1111, ComfyUI, InvokeAI)"
+    return None
+
+
+def _tc260_video_platform(producer: str) -> str | None:
+    """Name a registered TC260 producer, preserving multi-model organization labels."""
+    from remove_ai_watermarks._internal.tc260_producers import producer_for_code
+
+    row = producer_for_code(producer)
+    return row.video_platform if row else None
+
+
+def inspect_video_metadata(source: str | Path) -> VideoMetadataReport:
+    """Inspect supported AI-provenance metadata in a video container."""
+    from remove_ai_watermarks.metadata import get_ai_metadata
+
+    source_path = _video_source(source)
+    markers = get_ai_metadata(source_path)
+    return VideoMetadataReport(
+        source=source_path,
+        has_ai_metadata=bool(markers),
+        markers=markers,
+    )
+
+
+def identify_video(
+    source: str | Path,
+    *,
+    check_visible: bool = True,
+) -> VideoProvenanceReport:
+    """Identify locally readable AI provenance and stable visible video marks.
+
+    A negative result is reported as unknown, never clean. Proprietary pixel
+    watermarks such as video SynthID have no public local decoder.
+    """
+    from remove_ai_watermarks.metadata import get_ai_metadata
+
+    source_path = _video_source(source)
+    markers = get_ai_metadata(source_path)
+    selected_mark: str | None = None
+    detected_frames = 0
+    total_frames: int | None = None
+
+    if check_visible:
+        _require_video_runtime()
+        from remove_ai_watermarks.video_visible import scan_video_marks
+
+        scans = scan_video_marks(
+            source_path,
+            VIDEO_VISIBLE_MARKS,
+            collect_timestamps=False,
+        )
+        total_frames = len(scans[VIDEO_VISIBLE_MARKS[0]].detections)
+        selected = _select_stable_visible_mark(scans, markers, VIDEO_VISIBLE_MARKS)
+        if selected is not None:
+            selected_mark, _scan, regions, _padding, _mask_style = selected
+            detected_frames = sum(region is not None for region in regions)
+
+    claims_ai = _video_markers_claim_ai(markers)
+    has_signal = claims_ai or selected_mark is not None
+    caveats = ["No public local decoder can verify proprietary pixel watermarks such as video SynthID."]
+    if not check_visible:
+        caveats.append("Visible video-mark detection was skipped.")
+    if not has_signal and markers:
+        caveats.append(
+            f"A C2PA manifest signed by {markers.get('issuer', 'an unregistered signer')} records "
+            f"{markers.get('actions', 'no actions')} and no AI claim, as a platform re-encode does "
+            "(YouTube re-signs every upload); that is unknown, not proof that the video is clean."
+        )
+    elif not has_signal:
+        caveats.append("No supported signal was found; absence is unknown, not proof that the video is clean.")
+    return VideoProvenanceReport(
+        source=source_path,
+        is_ai_generated=True if has_signal else None,
+        confidence="high" if has_signal else "unknown",
+        platform=(
+            _VISIBLE_PLATFORM.get(selected_mark)
+            if selected_mark is not None
+            else _platform_from_video_metadata(markers)
+            if claims_ai
+            else None
+        ),
+        visible_mark=selected_mark,
+        visible_detected_frames=detected_frames,
+        total_frames=total_frames,
+        has_ai_metadata=bool(markers),
+        metadata_markers=markers,
+        caveats=tuple(caveats),
+    )
+
+
+def remove_video_metadata(
+    source: str | Path,
+    output: str | Path | None = None,
+    *,
+    keep_standard: bool = True,
+    _detected_metadata: dict[str, str] | None = None,
+) -> VideoMetadataResult:
+    """Remove AI metadata without transcoding video or audio streams.
+
+    The default output is ``<source_stem>_clean<source_suffix>``. A separate
+    output is required so the operation never overwrites the original file.
+    """
+    from remove_ai_watermarks.metadata import get_ai_metadata, strip_and_verify
+
+    source_path = _video_source(source)
+    output_path = _video_output(source_path, output)
+    detected = get_ai_metadata(source_path) if _detected_metadata is None else _detected_metadata
+    written, remaining = strip_and_verify(source_path, output_path, keep_standard=keep_standard)
+    return VideoMetadataResult(
+        source=source_path,
+        output=written,
+        detected=detected,
+        remaining=remaining,
+    )
+
+
+def remove_video_visible(
+    source: str | Path,
+    output: str | Path | None = None,
+    *,
+    mark: str = "auto",
+    backend: str = "cv2",
+    strip_metadata: bool = True,
+    temporal_consistency: bool = True,
+    _metadata_markers: dict[str, str] | None = None,
+) -> VideoVisibleResult:
+    """Remove a supported visible AI wordmark from a video.
+
+    ``mark="auto"`` scans every supported provider in one decode pass and selects
+    the first stable match in specificity order, except a Veo diamond nested in
+    a Sora cross-match or spanning the full clip against a partial Sora run,
+    with valid Google AI-video provenance. Explicit marks are
+    ``sora``, ``veo``, ``seedance``, ``doubao``, ``dola``, ``hailuo``, and ``kling``. The full
+    sequence is scanned before pixels change, and only recurring candidates are
+    accepted. Complete audio is copied without re-encoding; video is transcoded
+    because the pixels change. ``temporal_consistency=True`` motion-aligns a
+    safely covered prior fill after each image-backend pass; scene cuts and
+    disjoint masks keep the independent current fill. Completed output is
+    published atomically. When no stable mark is found, no output is written
+    and ``output`` in the result is ``None``.
+    """
+    _require_video_runtime()
+
+    from remove_ai_watermarks.metadata import get_ai_metadata
+    from remove_ai_watermarks.video_visible import encode_clean_video, scan_video_marks
+    from remove_ai_watermarks.watermark_registry import resolve_backend
+
+    if mark not in {"auto", *VIDEO_VISIBLE_MARKS}:
+        raise ValueError("Unsupported visible video mark; expected auto, sora, veo, seedance, dola, hailuo, or kling")
+    if backend not in {"auto", "cv2", "migan", "lama"}:
+        raise ValueError("Unsupported fill backend; expected auto, cv2, migan, or lama")
+
+    source_path = _video_source(source)
+    output_path = _video_output(source_path, output, operation="visible watermark removal")
+    markers = get_ai_metadata(source_path) if _metadata_markers is None else _metadata_markers
+
+    candidate_marks = VIDEO_VISIBLE_MARKS if mark == "auto" else (mark,)
+    scans = scan_video_marks(source_path, candidate_marks)
+    selected = _select_stable_visible_mark(scans, markers, candidate_marks)
+    if selected is None:
+        scan = scans[candidate_marks[0]]
+        return VideoVisibleResult(
+            source=source_path,
+            output=None,
+            mark=mark,
+            total_frames=len(scan.detections),
+            detected_frames=0,
+            removed_frames=0,
+            remaining_metadata=markers if strip_metadata else {},
+        )
+    mark, scan, regions, padding_fraction, mask_style = selected
+    detected_frames = sum(region is not None for region in regions)
+
+    # Validate optional model availability before ffmpeg creates or overwrites
+    # the requested output.
+    resolve_backend(backend)  # type: ignore[arg-type]
+    removed_frames = encode_clean_video(
+        source_path,
+        output_path,
+        scan,
+        regions,
+        backend=backend,  # type: ignore[arg-type]
+        strip_metadata=strip_metadata,
+        padding_fraction=padding_fraction,
+        mask_style=mask_style,
+        temporal_consistency=temporal_consistency,
+    )
+    remaining_metadata = get_ai_metadata(output_path) if strip_metadata else {}
+    return VideoVisibleResult(
+        source=source_path,
+        output=output_path,
+        mark=mark,
+        total_frames=len(scan.detections),
+        detected_frames=detected_frames,
+        removed_frames=removed_frames,
+        remaining_metadata=remaining_metadata,
+    )
+
+
+def _validate_video_profile(
+    profile: str,
+    quality: str,
+    *,
+    enabled: bool = True,
+    noise_std: float = DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    long_side: int = DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    fps: float = DEFAULT_VIDEO_SYNTHID_FPS,
+    batch_size: int = 4,
+    seed: int = 0,
+    model: str = DEFAULT_VIDEO_SYNTHID_VAE,
+) -> None:
+    """Reject incompatible profile options before processing any stage."""
+    if profile not in {"synthid", "seedance-experimental"}:
+        raise ValueError("profile must be synthid or seedance-experimental")
+    if quality not in {"delivery", "master"}:
+        raise ValueError("quality must be delivery or master")
+    if profile != "synthid" and not enabled:
+        raise ValueError("Selecting an invisible profile requires include_invisible=True (--invisible)")
+    if quality != "delivery" and (not enabled or profile != "seedance-experimental"):
+        raise ValueError("quality=master requires the enabled seedance-experimental profile")
+    if profile == "seedance-experimental" and (
+        noise_std != DEFAULT_VIDEO_SYNTHID_NOISE_STD
+        or long_side != DEFAULT_VIDEO_SYNTHID_LONG_SIDE
+        or fps != DEFAULT_VIDEO_SYNTHID_FPS
+        or batch_size != 4
+        or seed != 0
+        or model != DEFAULT_VIDEO_SYNTHID_VAE
+    ):
+        raise ValueError("Seedance uses a fixed recipe; SynthID tuning options must retain their defaults")
+
+
+def remove_video_all(
+    source: str | Path,
+    output: str | Path | None = None,
+    *,
+    mark: str = "auto",
+    backend: str = "cv2",
+    temporal_consistency: bool = True,
+    include_invisible: bool = False,
+    invisible_profile: Literal["synthid", "seedance-experimental"] = "synthid",
+    invisible_quality: Literal["delivery", "master"] = "delivery",
+    noise_std: float = DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    long_side: int = DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    fps: float = DEFAULT_VIDEO_SYNTHID_FPS,
+    batch_size: int = 4,
+    seed: int = 0,
+    model: str = DEFAULT_VIDEO_SYNTHID_VAE,
+    device: str = "auto",
+    _invisible_runtime: VideoVaeRuntime | None = None,
+) -> VideoAllResult:
+    """Run visible, metadata, and optional video-pixel processing.
+
+    The default path removes a stable visible provider mark when present and
+    always strips verified AI metadata. It writes a same-container passthrough
+    when neither signal is present, giving product callers one predictable
+    output contract. ``include_invisible=True`` additionally runs lossy VAE
+    regeneration with the oracle-certified default SynthID profile or the
+    explicitly selected experimental Seedance profile.
+    """
+    from remove_ai_watermarks.metadata import get_ai_metadata
+
+    _validate_video_profile(
+        invisible_profile,
+        invisible_quality,
+        enabled=include_invisible,
+        noise_std=noise_std,
+        long_side=long_side,
+        fps=fps,
+        batch_size=batch_size,
+        seed=seed,
+        model=model,
+    )
+    source_path = _video_source(source)
+    output_path = _video_output(source_path, output, operation="complete cleaning")
+    if include_invisible and invisible_profile == "seedance-experimental" and source_path.suffix.lower() != ".mp4":
+        raise ValueError("Experimental Seedance processing requires MP4 input")
+    if include_invisible and source_path.suffix.lower() not in _REGENERATED_VIDEO_EXTENSIONS:
+        supported = ", ".join(sorted(_REGENERATED_VIDEO_EXTENSIONS))
+        raise ValueError(f"Video SynthID regeneration requires one of: {supported}")
+    _require_video_runtime()
+    detected_metadata = get_ai_metadata(source_path)
+
+    with TemporaryDirectory(prefix=f".{source_path.stem}-video-all-", dir=source_path.parent) as temp_dir:
+        visible_output = Path(temp_dir) / f"visible{source_path.suffix}" if include_invisible else output_path
+        visible_result = remove_video_visible(
+            source_path,
+            visible_output,
+            mark=mark,
+            backend=backend,
+            strip_metadata=True,
+            temporal_consistency=temporal_consistency,
+            _metadata_markers=detected_metadata,
+        )
+        current_source = visible_result.output or source_path
+
+        if include_invisible:
+            invisible_result = remove_video_invisible(
+                current_source,
+                output_path,
+                profile=invisible_profile,
+                quality=invisible_quality,
+                noise_std=noise_std,
+                long_side=long_side,
+                fps=fps,
+                batch_size=batch_size,
+                seed=seed,
+                model=model,
+                device=device,
+                _runtime=_invisible_runtime,
+            )
+            remaining_metadata = invisible_result.remaining_metadata
+        elif visible_result.output is None:
+            metadata_result = remove_video_metadata(
+                source_path,
+                output_path,
+                _detected_metadata=detected_metadata,
+            )
+            remaining_metadata = metadata_result.remaining
+        else:
+            remaining_metadata = visible_result.remaining_metadata
+
+    return VideoAllResult(
+        source=source_path,
+        output=output_path,
+        visible_mark=visible_result.mark if visible_result.output is not None else None,
+        total_frames=visible_result.total_frames,
+        visible_detected_frames=visible_result.detected_frames,
+        visible_removed_frames=visible_result.removed_frames,
+        detected_metadata=detected_metadata,
+        remaining_metadata=remaining_metadata,
+        invisible_removed=include_invisible,
+        invisible_profile=invisible_profile if include_invisible else None,
+    )
+
+
+def remove_video_batch(
+    directory: str | Path,
+    output_directory: str | Path | None = None,
+    *,
+    mode: Literal["all", "visible", "metadata"] = "all",
+    mark: str = "auto",
+    backend: str = "cv2",
+    temporal_consistency: bool = True,
+    include_invisible: bool = False,
+    invisible_profile: Literal["synthid", "seedance-experimental"] = "synthid",
+    invisible_quality: Literal["delivery", "master"] = "delivery",
+    noise_std: float = DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    long_side: int = DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    fps: float = DEFAULT_VIDEO_SYNTHID_FPS,
+    batch_size: int = 4,
+    seed: int = 0,
+    model: str = DEFAULT_VIDEO_SYNTHID_VAE,
+    device: str = "auto",
+) -> VideoBatchResult:
+    """Process every supported video in one directory.
+
+    Files are processed sequentially so model and ffmpeg resource use stays
+    bounded. Per-file failures are returned in ``items`` and do not discard
+    successful outputs. Visible-only no-op files are copied byte-for-byte so the
+    output directory remains complete.
+    """
+    import shutil
+
+    from remove_ai_watermarks.video_encoding import atomic_video_output
+
+    _validate_video_profile(
+        invisible_profile,
+        invisible_quality,
+        enabled=include_invisible,
+        noise_std=noise_std,
+        long_side=long_side,
+        fps=fps,
+        batch_size=batch_size,
+        seed=seed,
+        model=model,
+    )
+    directory_path = Path(directory)
+    if not directory_path.exists():
+        raise FileNotFoundError(f"Video directory does not exist: {directory_path}")
+    if not directory_path.is_dir():
+        raise ValueError(f"Video batch source must be a directory: {directory_path}")
+    if mode not in {"all", "visible", "metadata"}:
+        raise ValueError("Unsupported video batch mode; expected all, visible, or metadata")
+    if mark not in {"auto", *VIDEO_VISIBLE_MARKS}:
+        raise ValueError("Unsupported visible video mark; expected auto, sora, veo, seedance, dola, hailuo, or kling")
+    if backend not in {"auto", "cv2", "migan", "lama"}:
+        raise ValueError("Unsupported fill backend; expected auto, cv2, migan, or lama")
+    if include_invisible and mode != "all":
+        raise ValueError("The invisible video stage is available only in all mode")
+    if mode != "metadata":
+        _require_video_runtime()
+
+    output_path = (
+        Path(output_directory)
+        if output_directory is not None
+        else directory_path.parent / f"{directory_path.name}_clean"
+    )
+    if output_path.resolve() == directory_path.resolve():
+        raise ValueError("Video batch output directory must differ from the source directory")
+    sources = tuple(
+        path
+        for path in sorted(directory_path.iterdir(), key=lambda candidate: candidate.name.lower())
+        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+    )
+    if sources:
+        output_path.mkdir(parents=True, exist_ok=True)
+    items: list[VideoBatchItem] = []
+    invisible_runtime: VideoVaeRuntime | None = None
+    invisible_runtime_error: str | None = None
+    for source_path in sources:
+        item_output = output_path / source_path.name
+        try:
+            if mode == "all":
+                if (
+                    include_invisible
+                    and invisible_runtime is None
+                    and source_path.suffix.lower()
+                    in ({".mp4"} if invisible_profile == "seedance-experimental" else _REGENERATED_VIDEO_EXTENSIONS)
+                ):
+                    # Validate the container before paying the multi-GB model
+                    # load, then retain one runtime for the complete batch.
+                    _video_source(source_path)
+                    if invisible_runtime_error is not None:
+                        raise RuntimeError(invisible_runtime_error)
+                    from remove_ai_watermarks.video_invisible import load_video_vae_runtime
+
+                    try:
+                        invisible_runtime = load_video_vae_runtime(model=model, device=device)
+                    except Exception as exc:
+                        invisible_runtime_error = str(exc)
+                        raise
+                all_result = remove_video_all(
+                    source_path,
+                    item_output,
+                    mark=mark,
+                    backend=backend,
+                    temporal_consistency=temporal_consistency,
+                    include_invisible=include_invisible,
+                    invisible_profile=invisible_profile,
+                    invisible_quality=invisible_quality,
+                    noise_std=noise_std,
+                    long_side=long_side,
+                    fps=fps,
+                    batch_size=batch_size,
+                    seed=seed,
+                    model=model,
+                    device=device,
+                    _invisible_runtime=invisible_runtime,
+                )
+                if all_result.remaining_metadata:
+                    raise RuntimeError(
+                        f"{len(all_result.remaining_metadata)} AI metadata marker(s) survived the complete pipeline"
+                    )
+                items.append(
+                    VideoBatchItem(
+                        source=source_path,
+                        output=all_result.output,
+                        mode=mode,
+                        changed=bool(
+                            all_result.visible_mark or all_result.detected_metadata or all_result.invisible_removed
+                        ),
+                        visible_mark=all_result.visible_mark,
+                        invisible_removed=all_result.invisible_removed,
+                    )
+                )
+            elif mode == "visible":
+                visible_result = remove_video_visible(
+                    source_path,
+                    item_output,
+                    mark=mark,
+                    backend=backend,
+                    strip_metadata=False,
+                    temporal_consistency=temporal_consistency,
+                )
+                if visible_result.output is None:
+                    with atomic_video_output(item_output) as temporary_output:
+                        shutil.copyfile(source_path, temporary_output)
+                items.append(
+                    VideoBatchItem(
+                        source=source_path,
+                        output=item_output,
+                        mode=mode,
+                        changed=visible_result.output is not None,
+                        visible_mark=visible_result.mark if visible_result.output is not None else None,
+                        invisible_removed=False,
+                    )
+                )
+            else:
+                metadata_result = remove_video_metadata(source_path, item_output)
+                if metadata_result.remaining:
+                    raise RuntimeError(
+                        f"{len(metadata_result.remaining)} AI metadata marker(s) survived metadata removal"
+                    )
+                items.append(
+                    VideoBatchItem(
+                        source=source_path,
+                        output=metadata_result.output,
+                        mode=mode,
+                        changed=bool(metadata_result.detected),
+                        visible_mark=None,
+                        invisible_removed=False,
+                    )
+                )
+        except Exception as exc:
+            items.append(
+                VideoBatchItem(
+                    source=source_path,
+                    output=None,
+                    mode=mode,
+                    changed=False,
+                    visible_mark=None,
+                    invisible_removed=False,
+                    error=str(exc),
+                )
+            )
+
+    return VideoBatchResult(
+        directory=directory_path,
+        output_directory=output_path,
+        items=tuple(items),
+    )
+
+
+def remove_video_invisible(
+    source: str | Path,
+    output: str | Path | None = None,
+    *,
+    profile: Literal["synthid", "seedance-experimental"] = "synthid",
+    quality: Literal["delivery", "master"] = "delivery",
+    noise_std: float = DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    long_side: int = DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    fps: float = DEFAULT_VIDEO_SYNTHID_FPS,
+    batch_size: int = 4,
+    seed: int = 0,
+    model: str = DEFAULT_VIDEO_SYNTHID_VAE,
+    device: str = "auto",
+    _runtime: VideoVaeRuntime | None = None,
+) -> VideoInvisibleResult:
+    """Regenerate video pixels through SynthID or experimental Seedance processing.
+
+    The function also strips source metadata during the transcode. The default
+    SynthID profile was calibrated against a provider oracle; Seedance is
+    experimental. This call performs no per-file verification. Source audio is
+    copied if present and its watermark status remains unverified.
+    """
+    from remove_ai_watermarks.metadata import get_ai_metadata
+
+    _validate_video_profile(
+        profile,
+        quality,
+        noise_std=noise_std,
+        long_side=long_side,
+        fps=fps,
+        batch_size=batch_size,
+        seed=seed,
+        model=model,
+    )
+    if profile == "seedance-experimental":
+        source_path = Path(source)
+        target = Path(output) if output is not None else source_path.with_stem(source_path.stem + "_clean")
+        return remove_video_seedance_experimental(source, target, device=device, quality=quality, _runtime=_runtime)
+    source_path = _video_source(source)
+    if source_path.suffix.lower() not in _REGENERATED_VIDEO_EXTENSIONS:
+        supported = ", ".join(sorted(_REGENERATED_VIDEO_EXTENSIONS))
+        raise ValueError(f"Video SynthID regeneration requires one of: {supported}")
+    _require_video_runtime()
+    from remove_ai_watermarks.video_invisible import regenerate_video_candidate
+
+    clean_output = Path(output) if output is not None else source_path.with_stem(source_path.stem + "_clean")
+    output_path = _video_output(
+        source_path,
+        clean_output,
+        operation="SynthID removal",
+    )
+    metrics = regenerate_video_candidate(
+        source_path,
+        output_path,
+        noise_std=noise_std,
+        long_side=long_side,
+        fps=fps,
+        batch_size=batch_size,
+        seed=seed,
+        model=model,
+        device=device,
+        runtime=_runtime,
+    )
+    return VideoInvisibleResult(
+        source=source_path,
+        output=output_path,
+        noise_std=noise_std,
+        metrics=metrics,
+        remaining_metadata=get_ai_metadata(output_path),
+    )
+
+
+def remove_video_seedance_experimental(
+    source: str | Path,
+    output: str | Path | None = None,
+    *,
+    device: str = "auto",
+    quality: Literal["delivery", "master"] = "delivery",
+    _runtime: VideoVaeRuntime | None = None,
+) -> VideoSeedanceExperimentalResult:
+    """Apply the experimental Seedance texture-transfer recipe to an owned MP4.
+
+    This pixel stage expects visible AI labels to have been handled separately.
+    It preserves native geometry, all frame timestamps, and source audio, and
+    strips AI metadata. CapCut verification remains a development-only check.
+    ``delivery`` writes H.264 High CRF18; ``master`` retains lossless-coded YUV.
+    Neither mode guarantees unchanged fine detail or a per-file detector result.
+    """
+    from remove_ai_watermarks.metadata import get_ai_metadata
+
+    source_path = _video_source(source)
+    if source_path.suffix.lower() != ".mp4":
+        raise ValueError("Experimental Seedance processing requires MP4 input")
+    if quality not in {"delivery", "master"}:
+        raise ValueError("quality must be delivery or master")
+    _require_video_runtime()
+    from remove_ai_watermarks.video_seedance import regenerate_seedance_experimental
+
+    clean_output = (
+        Path(output) if output is not None else source_path.with_stem(source_path.stem + "_seedance_experimental")
+    )
+    output_path = _video_output(source_path, clean_output, operation="Experimental Seedance processing")
+    metrics = regenerate_seedance_experimental(
+        source_path, output_path, device=device, quality=quality, runtime=_runtime
+    )
+    return VideoSeedanceExperimentalResult(
+        source=source_path,
+        output=output_path,
+        noise_std=0.0,
+        metrics=metrics,
+        remaining_metadata=get_ai_metadata(output_path),
+        quality=quality,
+    )

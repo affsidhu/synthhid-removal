@@ -1,0 +1,386 @@
+# Provenance fixtures
+
+These files exercise real container, metadata, and pixel-provenance formats.
+They are test inputs, not evaluation corpora.
+
+## Honor YOYO metadata reconstruction
+
+`synthetic/honor-yoyo-tc260.json` reconstructs the EXIF `UserComment` JSON
+structure observed in two public YOYO edits in this
+[Honor Club thread](https://club.honor.com/cn/thread-29898091-1-1.html), fetched
+on 2026-10-01 UTC. The downloaded JPEGs have SHA-256
+`99aa5cdf42cd4c3849401a32fc1f0738c229cc3ed903eba00a080e7eb29542d5` and
+`af779adba954926bb15bb9cb70ff597cb11e715b53e204fce5e64b1edf971aa1`.
+They remain untracked because public redistribution has not been cleared.
+
+The fixture retains the observed producer `001191440300MA5G49LC9K1YO01`,
+nested `ReservedCode1`/`ReservedCode2` objects, `PubSd` spelling, null hash
+binding, and RSA/SHA-256 algorithm identifiers. Generation IDs, signature,
+and public key are explicit synthetic placeholders. It contains no photograph,
+account handle, real signature, or claim of a valid asset binding. The producer's
+USCC matches Honor Device Co., Ltd. in its
+[official privacy statement](https://agreement.itsec.honor.com/asm/agrFile/getHtmlFile?agrNo=1477&branchId=0&country=ru&langCode=en-US&version=20250517).
+
+`tests/test_web_sample_fixtures.py` is the carrier recipe: it embeds this JSON
+in a solid-color JPEG, checks Honor attribution and preservation of nested JSON,
+reports the content signature as unsupported, and verifies removal preserves
+decoded pixels. This synthetic test input
+is distributed under the repository license. It does not establish gallery
+control/crop behavior, device/app versions, or a real verified RSA signature.
+
+## OpenRouter metadata survey
+
+The following files are original byte streams returned by OpenRouter's Image
+API on 2026-09-02. Each request used a repository-maintainer account, the same
+neutral still-life prompt, one 1:1 output, and no image reference. The prompt
+was `A documentary photograph of three smooth river stones on pale linen beside
+a small blue glass vase, soft natural daylight, plain uncluttered background,
+no text, no logos`.
+
+| File | Model | Cost | SHA-256 | Expected metadata result |
+| --- | --- | --- | --- | --- |
+| `recraft-v3.webp` | `recraft/recraft-v3` | USD 0.04 | `e94c99ab50410092dbb601c8269ce812879e2271e18c7880021d2118666542ae` | Valid C2PA; `recraft.ai`; `trainedAlgorithmicMedia` |
+| `krea-2-medium-turbo.png` | `krea/krea-2-medium-turbo` | USD 0.015 | `ee1302c01e8da8e316e6563b0f9d36d511b9048fb2f70b8851eeeda98c5fb6a0` | No locally readable provenance |
+
+Both were paid API generations. Recraft grants ownership for paid-plan output,
+and Krea states that users own compliant outputs. They are distributed under
+the repository license.
+
+- Recraft terms: <https://www.recraft.ai/docs/plans-and-billing/commercial-rights-and-ownership>
+- Krea terms: <https://www.krea.ai/krea-2-licensing>
+
+The same survey generated `sourceful/riverflow-v2-fast` output and found no
+locally readable metadata. It is not committed because Riverflow's terms
+restrict redistribution and using results to test or improve machine-learning
+systems. Its measured SHA-256 was
+`d4d7e80a3ed450129a0e77bdf330a83eb7de1e287d5b2b737cd26a011194a270`;
+OpenRouter recorded a USD 0.02 request cost.
+
+## WaveSpeedAI metadata survey
+
+The following measurements came from original byte streams returned by the
+WaveSpeedAI API on 2026-09-03. Each request used a repository-maintainer
+account and the same neutral still-life prompt recorded above. The account
+balance moved from USD 12.00 to USD 11.82 for the four successful requests.
+
+| File | WaveSpeedAI model | SHA-256 | Expected metadata result |
+| --- | --- | --- | --- |
+| `qwen-image.png` | `wavespeed-ai/qwen-image/text-to-image` | `5b6d832834397498d0587b9b2536f88c75e923195c43c2b71d9f7f3c5422b4f1` | No provenance signal; one non-provenance PNG `job-id` text field |
+| `hunyuan-image-3.png` | `wavespeed-ai/hunyuan-image-3` | `6ae2ac073ac79b02b0934c905364f200420c2ff60fea232bd9e0a5fca785cc09` | Valid C2PA from `fal.ai` naming `fal-ai/hunyuan-image`, plus Adobe TrustMark Variant P, schema 0 |
+| `kling-image-v3.png` | `kwaivgi/kling-image-v3/text-to-image` | `501ab865b47ba59b64bc0f68118300744b0d5c7be2fa4e2ecbb3a78de5d8a82b` | TC260 PNG `AIGC` field naming producer `001191110108335469089C10100`; no visible Kling mark |
+| `seedream-v4.jpg` | `bytedance/seedream-v4` | `9ec6af1fc0509d74e264b9631a6cddd2ce7ce20146347fe418e9306032beb759` | No locally readable provenance |
+
+All four original byte streams are committed. Section 11.1 of WaveSpeedAI's
+terms assigns its rights in Customer Data, explicitly including Outputs, to the
+customer. The live catalog records used for these requests expose no additional
+license, terms URL, attribution requirement, territory restriction, or
+commercial-use restriction. The maintainer therefore distributes these paid,
+neutral-prompt outputs under the repository license. This conclusion applies
+to these WaveSpeedAI API transactions; it does not import unrelated terms from
+the vendors' direct consumer services.
+
+- WaveSpeedAI terms: <https://wavespeed.ai/static/terms>
+- WaveSpeedAI commercial-use policy: <https://wavespeed.ai/docs/commercial-use-policy>
+- Qwen-Image license: <https://github.com/QwenLM/Qwen-Image/blob/main/LICENSE>
+
+## Qwen Create consumer output
+
+`qwen-create-qwen-image-2.png` is the original 2048 x 2048 PNG downloaded from
+an authenticated Qwen Create generation on 2026-09-03. It was generated by
+`Qwen-Image 2.0` at 1:1 using the neutral still-life prompt recorded above.
+The current global consumer surface differs from the Chinese Qwen text mark: it
+places a small Qwen symbol at the bottom right, not `千问AI生成`. The Qwen
+engine has separate text and symbol templates; the symbol path scores 0.848 on
+this fixture while the text path alone scores 0.178.
+
+- SHA-256: `60c39ed8aedb081193c62289be549785e74d31fc8d071961003fabd74712429d`
+- Expected metadata signal: TC260 AIGC label
+- Expected `ContentProducer`: `001191440101MA9Y9T4H7A00000`
+- Expected visible result: Qwen symbol detected and removable under the `qwen`
+  registry key
+- License: repository license; generated and explicitly cleared by the
+  maintainer
+- Qwen Create terms: <https://terms.alicdn.com/legal-agreement/terms/c_end_product_protocol/20260519200335649/20260519200335649.html>
+
+## Open DWT-DCT
+
+`sdxl-dwt-dct.png` is a real AI-generated carrier with the public 48-bit SDXL
+watermark embedded by ShieldMnt's `invisible-watermark` encoder using its
+`dwtDct` method. The carrier is the original `kling-image-v3.png` WaveSpeedAI
+output documented above, not a procedurally generated test texture. Encoding
+was lossless to PNG and removed the source container metadata; the resulting
+fixture contains only the expected open DWT-DCT signal.
+
+- Source carrier SHA-256: `501ab865b47ba59b64bc0f68118300744b0d5c7be2fa4e2ecbb3a78de5d8a82b`
+- Fixture SHA-256: `9ec3dcbfea19e4651b898f98ada28a1c81f054d63621a0bba2d484aa77da251a`
+- Payload: `0b101100111110110010010000011110111011000110011110`
+- Expected signal: open DWT-DCT, `Stable Diffusion XL`
+- Verification: 48/48 payload bits recovered by both the upstream decoder and
+  the in-tree decoder; `identify` reports the expected high-confidence signal
+- Encoder: <https://github.com/ShieldMnt/invisible-watermark>
+- License: repository license; the encoder is MIT-licensed
+
+## Microsoft InvisMark
+
+### Microsoft Paint
+
+`microsoft-paint-invismark.png` is the original byte stream supplied directly
+by Xusheng Li on 2026-09-02 after his reverse-engineering research documented
+Paint's pixel watermark and its matching C2PA soft binding. He authorized public
+redistribution of the fixture under the MIT license. The neutral image was
+generated by Microsoft Paint from the prompt `a cobalt blue circle above a tiny
+orange square`.
+
+- Source research: <https://xusheng.dev/posts/reversing/mspaint_invisible_watermark/main/>
+- SHA-256: `74eda22d210d534fcb5b75bedf8acd3bd110b48a95f4b9e546cd34f546effc05`
+- Dimensions: 1254 x 1254 RGB PNG
+- Expected signal: C2PA soft binding `com.microsoft.invismark.1`
+- Expected watermark ID: `a4ed421e-7c37-4409-998e-f8788c564572`
+- Expected platform: `Microsoft (Copilot / Designer)`
+- Expected C2PA result: valid asset binding and signature
+- License: MIT, reproduced in `../licenses/xusheng-li-paint-invismark-MIT.txt`
+
+### Microsoft MAI-Image through OpenRouter
+
+`microsoft-invismark.png` is the original byte stream returned by OpenRouter's
+Image API for `microsoft/mai-image-2.5-pro` on 2026-09-02. The request used a
+repository-maintainer account and asked for one 1:1 image. OpenRouter routed
+the request to Microsoft Azure. Microsoft states that it does not claim
+ownership of AI-service output; the maintainer distributes this output under
+the repository license.
+
+- SHA-256: `be27ac7c351e7f381dc69e140ca3611ecd9db81e40926c68050ceffdd0ce6c04`
+- Expected signal: C2PA soft binding `com.microsoft.invismark.1`
+- Expected watermark ID: `19b070a1-23f0-40eb-826c-cade306337eb`
+- Expected platform: `Microsoft (Copilot / Designer)`
+- Request cost recorded by OpenRouter: USD 0.110757
+- License: repository license
+- Terms: <https://www.microsoft.com/en/servicesagreement/>
+
+### Microsoft MAI-Image through Bing Image Creator
+
+`microsoft-bing-image-creator.jpg` is the original download produced without
+sign-in by Microsoft's public Bing Image Creator on 2026-09-03. The page named
+the model `MAI-Image-2.5-Flash`; it used the neutral still-life prompt recorded
+above and the 3:2 aspect ratio. The downloaded image has no visible AI badge,
+so it does not close the separate visible Microsoft-badge fixture request.
+
+- SHA-256: `55cad5355b6eeeb25f84ea074f85c0ea55b82d63c27f43e3429bb75f28734ac7`
+- Dimensions: 1248 x 832 RGB JPEG
+- Expected signal: valid C2PA plus soft binding `com.microsoft.invismark.1`
+- Expected watermark ID: `aec9a34e-665f-4549-9c02-9d29337a5de6`
+- Expected platform: `Microsoft (Copilot / Designer)`
+- License: repository license
+- Terms: <https://www.microsoft.com/en/servicesagreement/>
+
+## Adobe TrustMark
+
+`adobe-trustmark-p.png` is Adobe's official `images/ghost_P.png` Variant P
+example from [`adobe/trustmark`](https://github.com/adobe/trustmark) at commit
+`0ed40cbe8188f664fd9cbbeacd969807de27440a`.
+
+- Source: `https://raw.githubusercontent.com/adobe/trustmark/0ed40cbe8188f664fd9cbbeacd969807de27440a/images/ghost_P.png`
+- SHA-256: `e58c5825ed7e5d9fb04710ea541b61bd55879cad65554c0d46260aa24b3d0755`
+- Expected signal: TrustMark Variant P, schema 1
+- License: MIT, reproduced in `../licenses/adobe-trustmark-MIT.txt`
+
+
+## Ideogram C2PA attribution
+
+`ideogram-c2pa.png` is a SYNTHETIC signed manifest, not a vendor download: a
+64x64 flat PNG carrying a C2PA claim (`trainedAlgorithmicMedia`,
+`claim_generator "Ideogram/3.0"`) signed by a throwaway test CA whose leaf
+certificate subject is `O=Ideogram, Inc, CN=Ideogram, Inc`. It exercises the
+issuer-to-platform ATTRIBUTION path end to end through the real reader; the
+signer is deliberately untrusted (no trust anchors ship), which is also the
+fixture's second assertion: attribution and signer trust are separate
+dimensions.
+
+- Expected signal: C2PA, platform `Ideogram`, `ai_from_metadata` True
+- Expected signer: `untrusted` (test CA; attribution must not imply trust)
+- Recipe (no keys are committed): create a CA and an ES256 leaf with
+  `digitalSignature` key usage and subject `CN=Ideogram, Inc`, then
+  `c2pa.Builder.from_json(...).sign_file(png, out, Signer.from_info(
+  C2paSignerInfo(b"es256", leaf_pem + ca_pem, pkcs8_key, None)))`.
+- No third-party image and no Ideogram artifact contributes pixels or bytes.
+
+## Gemini API images and Gemini Omni video
+
+Original outputs generated by the maintainer and cleared for publication. The
+prompts were neutral scenes (a red bicycle, a paper boat, a coffee cup).
+
+| File | Source | Size | SHA-256 |
+| --- | --- | --- | --- |
+| `google-nano-banana.png` | Gemini API `gemini-2.5-flash-image`, 2026-09-24 | 1024 x 1024 PNG | `1fd7cccffb25f18e74fa5ebc639672f1361db6137e6b9e848bc33fc1f583c0fe` |
+| `google-nano-banana-2.jpg` | Gemini API `gemini-3.1-flash-image`, 2026-09-24 | 1408 x 768 JPEG | `977110ac48678627d907d635ac1b110b930044c350b669fb5f927a500e7d95ac` |
+| `google-nano-banana-pro.jpg` | Gemini API `gemini-3-pro-image`, 2026-09-24 | 1408 x 768 JPEG | `5fd14ce6d32f3806f0128f952eb30d36f7dad384a9eec728e5efbdb46ebca7db` |
+| `google-nano-banana-2-lite.jpg` | Gemini API `gemini-3.1-flash-lite-image`, 2026-09-24 | 1408 x 768 JPEG | `df4f422b9e77d6b08d3e6d095299f0cdf6d48f6c770632bb042a6c7b09627334` |
+| `google-gemini-omni-flash-api.mp4` | Gemini API `gemini-omni-1.1-flash`, 2026-09-24 | 10 s, 1280 x 720 H.264 and AAC | `fb034e94e4cbca9e0b56d82389d361fda0d6191f7e16f37ac6c55cd62a3621f7` |
+| `google-gemini-omni-app.mp4` | Gemini app, Omni video with the Media watermark setting on, 2026-09-23 | 10 s, 1280 x 720 H.264 and AAC | `f11595c6a9c0a72d4712d228354f589078d6940e529538cb009c799d8b8410d7` |
+
+Every file carries a valid Google C2PA manifest signed `Google Media Processing
+Services` (claim generator `Google C2PA Core Generator Library`) with
+`c2pa.created` ("Created by Google Generative AI.") and a SynthID
+`c2pa.edited` action: "Applied imperceptible SynthID watermark." on the images,
+"Added imperceptible SynthID watermark" on the videos. The API outputs have no
+visible mark. The app video adds the Veo-style diamond on every frame and a
+third action, "Added visible watermark".
+
+- Expected signal: C2PA AI-generated, platform `Google (Gemini / Imagen)`,
+  SynthID present by Google provenance; the app video reports visible mark
+  `veo` (Omni reuses the Veo diamond, so its platform reads `Google Veo`)
+- License: repository license; generated and explicitly cleared by the
+  maintainer
+
+## Runway Gen-4 image and Gen-4.5 video
+
+Original task artifacts generated by the maintainer on a Runway Standard plan on
+2026-09-24 and cleared for publication; neutral coffee-mug scenes.
+
+| File | Source | Size | SHA-256 |
+| --- | --- | --- | --- |
+| `runway-gen4-image.png` | Runway Gen-4 image, 16:9 1080p | 1920 x 1080 PNG | `12262d853760b4e6dab7a896b833331ee5af43cd6e9467b899b7de76c7361d8d` |
+| `runway-gen45-video.mp4` | Runway Gen-4.5 text-to-video, 5 s | 1280 x 720 H.264, 24 fps | `98c0040b60aad1187c45df5fd4d6e8a11762950329b1a89183d6a58d5b947ad2` |
+
+Both carry a valid C2PA manifest from `c2pa-rs`, signed with issuer `RUNWAY AI,
+INC.`, recording one `c2pa.created` action typed `trainedAlgorithmicMedia` with
+software agent `Runway Image Generation` 4.0.0 or `Runway Video Generation`
+4.5.0. Neither has a visible mark.
+
+- Expected signal: C2PA AI-generated, platform `Runway`, no SynthID claim
+- License: repository license; generated and explicitly cleared by the
+  maintainer
+
+## Amazon Bedrock Nova Canvas image and Nova Reel video
+
+Third-party sample outputs published in
+[`aws-samples/amazon-nova-samples`](https://github.com/aws-samples/amazon-nova-samples)
+at commit `ad2fe2074cbc260b9f1dbcec94a4ec3561c1159a`, copied unmodified.
+
+| File | Upstream path | Size | SHA-256 |
+| --- | --- | --- | --- |
+| `amazon-bedrock-nova-canvas.png` | `multimodal-embeddings/getting-started/sample_assets/images/dog.png` | 1280 x 720 PNG | `b2d38079222ca8499f2cbe3adca3f5521add6b383c99bf28d61021503bb3b7c1` |
+| `amazon-bedrock-nova-reel.mp4` | `multimodal-understanding/workshop/1-getting-started-with-nova-2/video/cell-phone.mp4` | 1280 x 720 H.264, 24 fps, 6 s | `36d2d68f9be53d9f123bd16127c6fbcbd838faa57cfdb28af44a515458a3cf64` |
+
+Both carry a valid C2PA manifest signed by `Amazon Web Services, Inc.` with claim
+generator `Amazon Bedrock`, recording one `c2pa.created` action typed
+`trainedAlgorithmicMedia` with software agent `Nova Canvas` or `Nova Reel 1.1`.
+The image was reported as Canva before the Amazon vendor row existed: the byte
+fallback found the `Canva` token inside `Nova Canvas`.
+
+- Expected signal: C2PA AI-generated, platform `Amazon Bedrock (Nova)`
+- License: MIT No Attribution, see
+  [`../licenses/aws-samples-amazon-nova-MIT-0.txt`](../licenses/aws-samples-amazon-nova-MIT-0.txt)
+
+## Higgsfield and Dreamina downloads
+
+Original downloads generated by the maintainer on paid Higgsfield and Dreamina
+plans on 2026-09-24 and cleared for publication; neutral coffee-mug scenes.
+Higgsfield serves its own and third-party models, so each file tests what the
+aggregator does to the upstream provenance.
+
+| File | Source | Size | SHA-256 |
+| --- | --- | --- | --- |
+| `higgsfield-flux-2-pro.png` | FLUX.2 Pro on Higgsfield | 768 x 1024 PNG | `4382b0c2a5f3d2b2c52f070ba9a12ffa259b4e0bad2446a65134cd700a06cb0a` |
+| `higgsfield-gpt-image.jpg` | GPT Image on Higgsfield, JPEG download | 1024 x 1024 JPEG | `4cb06b2084f2f1907421fbab38ccc459ea2cb33859005e69c07c3ea524dc0f6d` |
+| `higgsfield-kling-o1.png` | Kling O1 image on Higgsfield | 880 x 1168 PNG | `6ad75936db0bb172423564dd24d27bddb992917263555ecb5697cd2f354deeac` |
+| `higgsfield-veo-3-1-lite.mp4` | Veo 3.1 Lite on Higgsfield, 8 s | 1280 x 720 H.264, 24 fps | `7d4ffa63755d605538c9a73059b4f6354a57e4f21100a92497aebc3c19dc3485` |
+| `higgsfield-kling-3-0-turbo.mp4` | Kling 3.0 Turbo on Higgsfield, 5 s | 1280 x 720 H.264, 24 fps | `7011c92d52ec624da12600f24a4abb8d997f26cdea62d6f5a8d1940bc7ffcc9c` |
+| `higgsfield-happyhorse.mp4` | HappyHorse on Higgsfield, 5 s | 1280 x 720 H.264, 24 fps | `967dcb6022e19f55639ff705a58e5252a62a24405f247dcffefcc0f610149c30` |
+| `higgsfield-minimax-h3.mp4` | MiniMax Hailuo H3 on Higgsfield, 5 s | 2560 x 1440 H.264, 24 fps | `5fe5b9d08b9fb41a4d3eea470d443eb5df520235300e65134090338701215a43` |
+| `higgsfield-cinema-studio-v2.mp4` | Cinema Studio Video v2 on Higgsfield, 3 s, 2026-09-25 | 1280 x 720 H.264, 24 fps | `485449b69f1013a97970aabc5429327db1ff88559c81e3430c536fab108db7dc` |
+| `higgsfield-hailuo-2-3.mp4` | MiniMax Hailuo 2.3 on Higgsfield, 6 s, 2026-09-25 | 1366 x 768 H.264, 24 fps | `67f4b6c49f6b93485fd47c457f64d3f721ec326ec57a9fb39488d6b9023528b7` |
+| `higgsfield-genjutsu-motion-control.mp4` | Higgsfield Genjutsu motion control on our Wan 2.5 clip and FLUX.2 image, 2026-09-25 | 842 x 486 H.264 | `a3c2e8c506327ff0bdee078372be8d89fb913672f61efc66a4791771026ec0fc` |
+| `dreamina-seedream-5-pro.jpg` | Seedream 5.0 Pro on Dreamina | 2368 x 1776 JPEG | `2393cb470dc7c69de4c421f338aeb08192ed916515bc095a3afcd2ef4af89c90` |
+| `dreamina-seedance-2-mini.mp4` | Seedance 2.0 Mini on Dreamina, 5 s | 1280 x 720 H.264, 60 fps | `d2712d4804074ac08e28fc77ff1c1ff986e6c4bbaf3ae9737f743719e51a59de` |
+
+The FLUX.2 Pro PNG keeps Black Forest Labs' C2PA manifest, but Higgsfield
+inserted its `hf-job-id` text chunk after signing, so validation fails with
+`assertion.dataHash.mismatch`. The GPT Image JPEG keeps a valid OpenAI manifest
+and has no `hf-job-id`. The Kling O1 PNG carries a TC260 label with Kuaishou's
+producer code plus `hf-job-id`. Both the GPT Image and the Kling O1 file score
+0.53 as a Gemini sparkle on wood texture. The Veo clip keeps Google's C2PA with
+its SynthID action, and the Kling detector matched its wood texture on every
+frame. The three Chinese videos carry only an MP4 `AIGC` TC260 label, with the
+producer written as the bare string `kling`, as Alibaba Tongyi Yunqi's code
+(`001191330106MA2CFLDG4R10001`), or as the bare string `MiniMax`. Dreamina files
+carry a ByteDance C2PA manifest whose active claim is a transcode, with the
+`Dreamina/7.5.0` generator in the ingredient, and a visible boxed `AI` badge in
+the top-left corner that the library does not detect. Higgsfield's own Cinema
+Studio v2 carries Kling's TC260 label (producer `kling`); neither it nor the
+Hailuo 2.3 clip has a visible mark, and both were false visible `kling` and
+`hailuo` detections on wood grain before the swirl edge gate and the Hailuo
+white-pixel gate. The Genjutsu clip has no provenance at all and was a drifting
+wordmark match on wood grain until Kling runs had to stay anchored within 0.95
+IoU.
+
+- Expected signal: FLUX.2 Pro, AI at medium confidence with platform
+  `Higgsfield (model not identified)` and invalid C2PA; GPT Image, OpenAI;
+  Kling O1, the TC260 label; neither of those two reports a Gemini sparkle.
+  Veo, `Google (Gemini / Imagen)` with SynthID present and no Kling mark;
+  Kling, `Kuaishou Kling AI`; HappyHorse, `Alibaba Tongyi (Wan, HappyHorse)`;
+  MiniMax, `MiniMax Hailuo AI`; both Dreamina files, `ByteDance Dreamina`;
+  Cinema Studio v2 and Hailuo 2.3, no visible mark
+- License: repository license; generated and explicitly cleared by the
+  maintainer
+
+## xAI Grok video and YouTube re-encodes
+
+Original outputs and platform round trips produced by the maintainer and
+cleared for publication; neutral scenes (a coffee cup, a paper boat).
+
+| File | Source | Size | SHA-256 |
+| --- | --- | --- | --- |
+| `xai-grok-imagine-video.mp4` | Grok Imagine Quick Animate, SuperGrok, 2026-09-23 | 6 s, 448 x 672 | `c6e3329009260cd230deaadd0cc7293269a94c4628010cd7eeb3d390b76cc0c2` |
+| `youtube-reencode-grok.mp4` | YouTube Studio download of the Grok video uploaded unlisted, 2026-09-24 | 6 s, 448 x 672 | `236dd73a25a893b8f2c7bbdad8e1208341251c2b12e7b261c1fff65bf58277a5` |
+| `youtube-reencode-gemini-omni-flash.mp4` | YouTube Studio download of `google-gemini-omni-flash-api.mp4` uploaded unlisted, 2026-09-24 | 10 s, 1280 x 720 | `aa2fde5c0444eda05f40db2a8974183284016876c9788f099dda9df5aac1714f` |
+
+The Grok original carries a C2PA manifest with claim generator `Grok Imagine`
+and a `trainedAlgorithmicMedia` source, signed by a self-signed ephemeral
+certificate. YouTube re-signs both uploads with a valid Google LLC manifest
+from `YouTube Video Processing Services` recording `c2pa.opened` and
+`c2pa.transcoded`. The Omni ingredient keeps its SynthID action; the Grok
+ingredient's self-signed manifest is dropped by the reader.
+
+- Expected signal: Grok original, AI with platform `xAI Grok Imagine` and no
+  SynthID; YouTube Grok re-encode, unknown with no platform and no SynthID;
+  YouTube Omni re-encode, AI with SynthID present by Google provenance
+- License: repository license; generated and explicitly cleared by the
+  maintainer
+
+## Google Photos AI edit (iOS)
+
+`google-photos-ios-edit.jpg` is an original 3024 x 4032 iPhone 15 Pro Max photo
+edited in Google Photos on iOS to remove an object, supplied by the maintainer
+on 2026-09-23 and cleared for publication unmodified, including its EXIF GPS
+position. The C2PA manifest is signed by Google LLC with certificate common name
+`Google Photos` (claim generator `Google C2PA SDK for iOS`) and records
+`c2pa.opened` and `c2pa.deleted`, the latter typed
+`compositeWithTrainedAlgorithmicMedia`, with no action description and no
+SynthID action. XMP adds `photoshop:Credit` `Edited with Google AI`. Nothing in
+this file names the edit tool or SynthID; Google's checker found SynthID in all
+four Photos AI edits under `data/captures/2026-09/google-photos/`, so the tool
+reports it present.
+
+- SHA-256: `d32a9ddb07f6902262246ec380b04e1e7016ef40bbffe6e8d82f4dc48e84ba23`
+- Expected signal: C2PA AI-enhanced, platform `Google Photos (AI edit)`, SynthID
+  present with the Google Photos measurement caveat
+- License: repository license; captured and explicitly cleared by the
+  maintainer
+
+## Apple Image Playground
+
+`apple-image-playground.png` is an original 1024 x 1024 Display P3 PNG from
+Image Playground, exported by the maintainer from their iPhone on 2026-09-23.
+The file records no OS version; the device ran iOS 27.0 (operator's
+Settings screen, 2026-09-23). Apple writes no C2PA manifest and no EXIF software field; the only
+provenance is XMP `photoshop:Credit` `Apple Image Playground` beside
+`Iptc4xmpExt:DigitalSourceType` `trainedAlgorithmicMedia`. There is no visible
+mark. Apple announced SynthID for Image Playground in a later software update.
+Only Apple's own verifier could show whether this file carries it; another
+vendor's SynthID oracle is not evidence either way.
+
+- SHA-256: `5ade61fc4cd869e2487745af61c7e23d008a3e9c2b5c440d2ffe16c2d3a32315`
+- Expected signal: IPTC digitalSourceType, platform `Apple Image Playground`
+- License: repository license; generated and explicitly cleared by the
+  maintainer
