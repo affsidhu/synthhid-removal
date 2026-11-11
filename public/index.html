@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SynthID Remover</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c0e12;
+      --card: #161a22;
+      --line: #2a3140;
+      --text: #f4f6fb;
+      --muted: #9aa3b5;
+      --accent: #7cffb2;
+      --accent-ink: #062214;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Georgia, "Times New Roman", serif;
+      background:
+        radial-gradient(900px 420px at 10% -10%, #1c3b2c 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+    }
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 48px 20px 72px;
+    }
+    h1 {
+      font-size: clamp(40px, 6vw, 64px);
+      line-height: 0.95;
+      margin: 0 0 12px;
+      letter-spacing: -0.03em;
+    }
+    .lede {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--muted);
+      font-size: 17px;
+      max-width: 62ch;
+      line-height: 1.5;
+    }
+    .card {
+      margin-top: 28px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }
+    .drop {
+      border: 1.5px dashed #3d4b63;
+      border-radius: 14px;
+      min-height: 220px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 24px;
+      cursor: pointer;
+      background: #10141b;
+    }
+    .drop.over { border-color: var(--accent); background: #122018; }
+    .drop strong {
+      display: block;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      font-size: 20px;
+      margin-bottom: 6px;
+    }
+    .drop span {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--muted);
+    }
+    input[type="file"] { display: none; }
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 14px;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+    }
+    label { color: var(--muted); font-size: 14px; }
+    select, button {
+      font: inherit;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #0f131a;
+      color: var(--text);
+      padding: 10px 16px;
+    }
+    button.primary {
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: transparent;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    figure {
+      margin: 0;
+      background: #0f131a;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    figcaption {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 8px 10px 0;
+    }
+    img { width: 100%; display: block; max-height: 420px; object-fit: contain; background: #090b10; }
+    .note {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      margin: 16px 4px 0;
+    }
+    @media (max-width: 700px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Drop an image.<br>Download a cleaned copy.</h1>
+    <p class="lede">The picture stays on this device. Nothing is uploaded. This page wipes the hidden file labels and lightly changes the pixels so a fresh file comes out the other side.</p>
+    <section class="card">
+      <div class="drop" id="drop">
+        <div>
+          <strong>Drop an image here</strong>
+          <span>or click to choose a JPG, PNG, or WEBP</span>
+        </div>
+      </div>
+      <input id="file" type="file" accept="image/jpeg,image/png,image/webp" />
+      <div class="row">
+        <label for="strength">Strength</label>
+        <select id="strength">
+          <option value="light" selected>Light</option>
+          <option value="strong">Strong</option>
+        </select>
+        <button class="primary" id="go" disabled>Clean and download</button>
+      </div>
+      <div class="grid">
+        <figure>
+          <figcaption>Original</figcaption>
+          <img id="before" alt="" />
+        </figure>
+        <figure>
+          <figcaption>Cleaned</figcaption>
+          <img id="after" alt="" />
+        </figure>
+      </div>
+      <p class="note">Light keeps the picture looking the same and strips the labels stored inside the file. Strong nudges more pixels and can look a little grainy. The heavy graphics-card remover that is also in this GitHub project cannot run on Cloudflare.</p>
+    </section>
+  </main>
+  <script>
+    const drop = document.getElementById("drop");
+    const fileInput = document.getElementById("file");
+    const go = document.getElementById("go");
+    const before = document.getElementById("before");
+    const after = document.getElementById("after");
+    const strength = document.getElementById("strength");
+    let currentFile = null;
+
+    drop.addEventListener("click", () => fileInput.click());
+    drop.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (event) => {
+      event.preventDefault();
+      drop.classList.remove("over");
+      const file = event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) loadFile(file);
+    });
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files[0]) loadFile(fileInput.files[0]);
+    });
+
+    function loadFile(file) {
+      if (!file.type.startsWith("image/")) return;
+      currentFile = file;
+      before.src = URL.createObjectURL(file);
+      after.removeAttribute("src");
+      go.disabled = false;
+    }
+
+    go.addEventListener("click", async () => {
+      if (!currentFile) return;
+      go.disabled = true;
+      go.textContent = "Working...";
+      try {
+        const blob = await cleanImage(currentFile, strength.value);
+        const url = URL.createObjectURL(blob);
+        after.src = url;
+        const link = document.createElement("a");
+        const base = (currentFile.name || "image").replace(/\.[^.]+$/, "");
+        link.href = url;
+        link.download = base + "-cleaned.jpg";
+        link.click();
+      } finally {
+        go.disabled = false;
+        go.textContent = "Clean and download";
+      }
+    });
+
+    function cleanImage(file, level) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          ctx.drawImage(image, 0, 0);
+          const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const pixels = frame.data;
+          const amount = level === "strong" ? 3 : 1;
+          for (let i = 0; i < pixels.length; i += 4) {
+            const n = ((i * 17) ^ (i >> 3)) & 255;
+            pixels[i] = clamp(pixels[i] + ((n % (amount * 2 + 1)) - amount));
+            pixels[i + 1] = clamp(pixels[i + 1] + (((n >> 2) % (amount * 2 + 1)) - amount));
+            pixels[i + 2] = clamp(pixels[i + 2] + (((n >> 4) % (amount * 2 + 1)) - amount));
+          }
+          ctx.putImageData(frame, 0, 0);
+          canvas.toBlob((blob) => {
+            if (!blob) reject(new Error("Could not export the image"));
+            else resolve(blob);
+          }, "image/jpeg", level === "strong" ? 0.86 : 0.92);
+        };
+        image.onerror = () => reject(new Error("Could not read that image"));
+        image.src = URL.createObjectURL(file);
+      });
+    }
+
+    function clamp(value) {
+      return value < 0 ? 0 : value > 255 ? 255 : value;
+    }
+  </script>
+</body>
+</html>
